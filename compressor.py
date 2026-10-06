@@ -1,6 +1,7 @@
 import os
 import subprocess
 import json
+import shutil
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -77,8 +78,19 @@ def run_ffmpeg(cmd, duration, on_progress):
 
 
 def compress_video(input_path, output_path, target_size_mb=20, threads=0):
-    """Compress video to a target file size in MB. Safe to call from several threads at once."""
+    """Compress video to a target file size in MB. Safe to call from several threads at once.
+    A video that's already under the target is copied across untouched (as uncompressed_<name>) instead."""
     name = os.path.basename(input_path)
+
+    # Already small enough? Then don't compress it: copy it across as-is, with an
+    # "uncompressed_" prefix (instead of "compressed_") so you can tell it wasn't touched.
+    size_mb = os.path.getsize(input_path) / (1024 * 1024)
+    if size_mb <= target_size_mb:
+        output_path = os.path.join(os.path.dirname(output_path), f"uncompressed_{name}")
+        shutil.copy2(input_path, output_path)
+        log(f"{name} is already {size_mb:.1f}MB (target is {target_size_mb}MB), so it was copied as-is to {output_path}\n")
+        return
+
     duration = get_video_duration(input_path)
 
     # Target size in bits
@@ -92,7 +104,7 @@ def compress_video(input_path, output_path, target_size_mb=20, threads=0):
         log(f"Warning: {name} is too long to fit nicely into {target_size_mb}MB without quality loss.")
         video_bitrate = 100000
 
-    log(f"Compressing {name} (Duration: {duration:.1f}s)...")
+    log(f"Compressing {name}...")
 
     null_device = "NUL" if os.name == "nt" else "/dev/null"
 
@@ -147,6 +159,29 @@ def compress_video(input_path, output_path, target_size_mb=20, threads=0):
     log(f"Done! Saved to {output_path} (took {took // 60}m {took % 60:02d}s)\n")
 
 
+def offer_to_delete(question, paths):
+    """Ask a yes/no question (the default is no) and permanently delete the given files if the answer is yes."""
+    if not paths:
+        return
+    try:
+        answer = input(f"{question} [y/N]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):  # no keyboard attached, or Ctrl+C: play it safe and keep everything
+        print()
+        return
+    if answer not in ("y", "yes"):
+        print("Kept.\n")
+        return
+
+    deleted = 0
+    for path in paths:
+        try:
+            os.remove(path)
+            deleted += 1
+        except OSError as e:  # e.g. the file is open in a video player
+            print(f"Couldn't delete {os.path.basename(path)}: {e}")
+    print(f"Deleted {deleted} of {len(paths)} video(s).\n")
+
+
 if __name__ == "__main__":
     # Use the folder where the script itself is currently running (Relative Path)
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -171,6 +206,8 @@ if __name__ == "__main__":
 
         print(f"Found {len(files)} video(s). Compressing {workers} at a time...\n")
 
+        failed = set()
+
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {}
             for filename in files:
@@ -186,6 +223,27 @@ if __name__ == "__main__":
                 try:
                     future.result()
                 except Exception as e:
+                    failed.add(futures[future])
                     log(f"Error processing {futures[future]}: {e}\n")
 
-        print("All batch processing complete!")
+        print("All batch processing complete!\n")
+
+        # Clean-up: two separate questions, and anything other than "y" keeps the files.
+        # The originals of videos that failed are never offered for deletion, so you can't lose them.
+        if failed:
+            print(f"Note: {len(failed)} video(s) failed, so their originals are left out of the clean-up below.\n")
+
+        originals = [os.path.join(input_folder, f) for f in files if f not in failed]
+        offer_to_delete(
+            f"Permanently delete the {len(originals)} original video(s) in {os.path.basename(input_folder)}?",
+            originals
+        )
+
+        results = [
+            os.path.join(output_folder, f) for f in os.listdir(output_folder)
+            if f.lower().endswith(supported_extensions)
+        ]
+        offer_to_delete(
+            f"Permanently delete the {len(results)} video(s) in {os.path.basename(output_folder)}?",
+            results
+        )

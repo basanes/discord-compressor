@@ -94,8 +94,8 @@ if __name__ == "__main__":
     # Use the folder where the script itself is currently running (Relative Path)
     current_dir = os.path.dirname(os.path.abspath(__file__))
 
-    input_folder = os.path.join(current_dir, "input_videos")
-    output_folder = os.path.join(current_dir, "compressed_videos")
+    input_folder = os.path.join(current_dir, ".gitignore\\input_videos")
+    output_folder = os.path.join(current_dir, ".gitignore\\compressed_videos")
 
     os.makedirs(input_folder, exist_ok=True)
     os.makedirs(output_folder, exist_ok=True)

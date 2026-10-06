@@ -2,21 +2,30 @@ import os
 import subprocess
 import json
 import tempfile
-import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+try:
+    from tqdm import tqdm
+except ImportError:
+    raise SystemExit("This script needs tqdm for its progress bars. Install it with:  pip install tqdm")
 
 # How many videos to compress at the same time.
 # Each ffmpeg/x264 process already uses several CPU cores, so half the core
 # count is a sensible default. Raise or lower it to suit your machine.
 MAX_WORKERS = max(1, (os.cpu_count() or 2) // 2)
 
-# Stops output from different threads getting mixed together on one line.
-print_lock = threading.Lock()
+# Two-pass encoding reads the whole video twice. Pass 1 only analyses it (and x264
+# runs it with faster settings), so it takes less time than pass 2. This is the
+# share of each progress bar given to pass 1. If the bar seems to speed up or
+# slow down when it switches to pass 2, nudge this number.
+PASS1_SHARE = 0.3
 
 
 def log(message):
-    with print_lock:
-        print(message, flush=True)
+    # tqdm.write prints above the progress bars without garbling them, and it is
+    # thread-safe, so output from different threads can't get mixed together.
+    tqdm.write(message)
 
 
 def get_video_duration(file_path):
@@ -31,17 +40,40 @@ def get_video_duration(file_path):
     return float(data['format']['duration'])
 
 
-def run_ffmpeg(cmd):
-    """Run an ffmpeg command and raise an error (with ffmpeg's message) if it fails."""
-    result = subprocess.run(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        encoding="utf-8",
-        errors="replace",
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"ffmpeg exited with code {result.returncode}:\n{result.stderr.strip()}")
+def run_ffmpeg(cmd, duration, on_progress):
+    """Run an ffmpeg command, calling on_progress(fraction) as it works (fraction goes 0.0 -> 1.0).
+    Raises an error (with ffmpeg's message) if it fails."""
+    # ffmpeg's error text goes to a temp file rather than a pipe, so it can't fill
+    # up and stall ffmpeg while we're busy reading its progress from stdout.
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as err_file:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=err_file,
+            encoding="utf-8",
+            errors="replace",
+        )
+        try:
+            # Because of "-progress pipe:1", ffmpeg prints a block of key=value lines
+            # about twice a second. out_time_us is how much of the video it has
+            # processed so far, in microseconds ("N/A" until the first frame is done).
+            for line in proc.stdout:
+                key, _, value = line.strip().partition("=")
+                if key == "out_time_us" and value.lstrip("-").isdigit():
+                    seconds_done = int(value) / 1_000_000
+                    on_progress(min(max(seconds_done / duration, 0.0), 1.0))
+            proc.wait()
+        except BaseException:
+            proc.kill()  # don't leave an orphaned ffmpeg running
+            proc.wait()
+            raise
+        finally:
+            proc.stdout.close()
+
+        if proc.returncode != 0:
+            err_file.seek(0)
+            raise RuntimeError(f"ffmpeg exited with code {proc.returncode}:\n{err_file.read().strip()}")
 
 
 def compress_video(input_path, output_path, target_size_mb=20, threads=0):
@@ -64,38 +96,63 @@ def compress_video(input_path, output_path, target_size_mb=20, threads=0):
 
     null_device = "NUL" if os.name == "nt" else "/dev/null"
 
+    # Fixed-width label so the bars of different videos line up
+    label = name if len(name) <= 25 else name[:22] + "..."
+    started = time.monotonic()
+
     # Two-pass encoding writes a stats log between the passes. By default every
     # ffmpeg process uses the same filename (ffmpeg2pass-0.log), so parallel jobs
     # would overwrite each other. Giving each job its own temp folder avoids that,
     # and the folder (with its logs) is deleted automatically when we're done.
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with tempfile.TemporaryDirectory() as tmp_dir, tqdm(
+        total=100,
+        desc=f"{label:<25} pass 1/2",
+        bar_format="{desc} {percentage:3.0f}%|{bar}| {elapsed}",  # elapsed time only, no ETA
+        dynamic_ncols=True,
+        leave=False,  # the bar disappears when finished; the "Done!" line below replaces it
+    ) as bar:
         passlog = os.path.join(tmp_dir, "pass")
 
-        common = ["ffmpeg", "-y", "-nostdin", "-hide_banner", "-loglevel", "error", "-i", input_path]
+        common = [
+            "ffmpeg", "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
+            "-nostats", "-progress", "pipe:1",  # machine-readable progress on stdout
+            "-i", input_path,
+        ]
         video_opts = ["-c:v", "libx264", "-b:v", str(int(video_bitrate)), "-threads", str(threads)]
 
+        def run_pass(number, pass_opts):
+            # Each pass reports 0-100% of the video; map that onto its slice of the bar.
+            low, high = (0, PASS1_SHARE) if number == 1 else (PASS1_SHARE, 1)
+
+            def on_progress(fraction):
+                bar.n = 100 * (low + (high - low) * fraction)
+                bar.refresh()
+
+            bar.set_description_str(f"{label:<25} pass {number}/2")
+            on_progress(0)
+            run_ffmpeg(common + video_opts + pass_opts, duration, on_progress)
+            on_progress(1)
+
         # Pass 1
-        run_ffmpeg(common + video_opts + [
-            "-pass", "1", "-passlogfile", passlog,
-            "-an", "-f", "null", null_device
-        ])
+        run_pass(1, ["-pass", "1", "-passlogfile", passlog, "-an", "-f", "null", null_device])
 
         # Pass 2
-        run_ffmpeg(common + video_opts + [
+        run_pass(2, [
             "-pass", "2", "-passlogfile", passlog,
             "-c:a", "aac", "-b:a", "128k",
             output_path
         ])
 
-    log(f"Done! Saved to {output_path}\n")
+    took = int(time.monotonic() - started)
+    log(f"Done! Saved to {output_path} (took {took // 60}m {took % 60:02d}s)\n")
 
 
 if __name__ == "__main__":
     # Use the folder where the script itself is currently running (Relative Path)
     current_dir = os.path.dirname(os.path.abspath(__file__))
 
-    input_folder = os.path.join(current_dir, ".gitignore\\input_videos")
-    output_folder = os.path.join(current_dir, ".gitignore\\compressed_videos")
+    input_folder = os.path.join(current_dir, "input_videos")
+    output_folder = os.path.join(current_dir, "compressed_videos")
 
     os.makedirs(input_folder, exist_ok=True)
     os.makedirs(output_folder, exist_ok=True)

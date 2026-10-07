@@ -212,7 +212,10 @@ if __name__ == "__main__":
             futures = {}
             for filename in files:
                 in_file = os.path.join(input_folder, filename)
-                out_file = os.path.join(output_folder, f"compressed_{filename}")
+                # H.264 video + AAC audio can't be stored in a .webm file, so those come out as .mp4
+                stem, ext = os.path.splitext(filename)
+                out_name = f"compressed_{stem}.mp4" if ext.lower() == ".webm" else f"compressed_{filename}"
+                out_file = os.path.join(output_folder, out_name)
                 future = pool.submit(
                     compress_video, in_file, out_file,
                     target_size_mb=20, threads=threads_per_job

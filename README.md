@@ -1,14 +1,17 @@
-# Video Compressor
+# Discord Video Compressor
 
-Shrink a whole folder of videos down to a target file size (20 MB by default) with one command. It's a small Python script around [ffmpeg](https://ffmpeg.org/): it works out the bitrate needed to hit your target, encodes with two-pass H.264, and runs several videos at once with a live progress bar for each.
+Get any video under Discord's 20 MB upload limit with one command.
+
+Discord's free upload limit is 20 MB (as of August 2026), and a screen recording or game clip blows past that in seconds. Instead of guessing quality settings and re-exporting until it fits, you tell this tool the size you need and it does the maths: drop your clips in a folder, run the script, and drag the results straight into Discord.
+
+It's a small Python script around [ffmpeg](https://ffmpeg.org/). It works out the bitrate that lands just under your size limit, encodes with two-pass H.264, and runs several videos at once with a live progress bar for each.
 
 ## Features
 
-- **Target file size.** Calculates the video bitrate that should land just under your target and uses two-pass x264 encoding for accurate results.
-- **Batch processing.** Compresses every video in `input_videos/` in one run.
-- **Parallel jobs.** Several videos at a time (default: half your CPU cores), with the cores shared out between the running jobs.
+- **Built for a size limit.** You set the target size (20 MB by default) and it calculates the bitrate to hit it, using two-pass x264 for accurate results. No quality slider to guess at.
+- **Everything ready to upload.** Videos that are already under the limit are copied across untouched as `uncompressed_<name>`, so `compressed_videos/` ends up holding files that are all ready to drop into Discord.
+- **Batch processing.** Handles a whole folder of clips in one run, several at a time (default: half your CPU cores).
 - **Real progress bars.** One bar per video, driven by ffmpeg's actual progress, plus elapsed time. No guessed ETA.
-- **Leaves small files alone.** A video that's already under the target isn't re-encoded, just copied across as `uncompressed_<name>`.
 - **Optional clean-up.** When everything is done you're asked, separately, whether to delete the originals and the compressed videos.
 
 ## Requirements
@@ -38,7 +41,7 @@ Using `python -m pip` makes sure it goes into the same Python you'll run the scr
 ## Usage
 
 1. Run the script once. It creates `input_videos/` and `compressed_videos/` next to `compressor.py` (or create them yourself).
-2. Put your videos in `input_videos/`. Supported: `.mp4`, `.mov`, `.avi`, `.mkv`, `.webm`.
+2. Put your clips in `input_videos/`. Supported: `.mp4`, `.mov`, `.avi`, `.mkv`, `.webm`.
 3. Run it again:
 
    ```
@@ -47,7 +50,7 @@ Using `python -m pip` makes sure it goes into the same Python you'll run the scr
 
    (Use `python3` on macOS and Linux.)
 
-4. Your results appear in `compressed_videos/`:
+4. Open `compressed_videos/` and drag the files into Discord:
 
 | Input video | Saved in `compressed_videos/` as |
 |-------------|----------------------------------|
@@ -61,24 +64,34 @@ Using `python -m pip` makes sure it goes into the same Python you'll run the scr
 ```
 Found 3 video(s). Compressing 2 at a time...
 
-holiday.mp4 is already 12.4MB (target is 20MB), so it was copied as-is to ...\compressed_videos\uncompressed_holiday.mp4
+short_clip.mp4 is already 12.4MB (target is 20MB), so it was copied as-is to ...\compressed_videos\uncompressed_short_clip.mp4
 
-Compressing match_highlights.mp4...
-Compressing birthday_party.mov...
-match_highlights.mp4      pass 2/2  73%|█████████████████████████████▏          | 00:08
-birthday_party.mov        pass 1/2  19%|███████▌                                | 00:02
+Compressing highlight_reel.mp4...
+Compressing funny_moment.mov...
+highlight_reel.mp4        pass 2/2  73%|█████████████████████████████▏          | 00:08
+funny_moment.mov          pass 1/2  19%|███████▌                                | 00:02
 ```
 
 Finished videos print a line above the bars, and then the clean-up questions appear:
 
 ```
-Done! Saved to ...\compressed_videos\compressed_match_highlights.mp4 (took 1m 12s)
-Done! Saved to ...\compressed_videos\compressed_birthday_party.mov (took 0m 48s)
+Done! Saved to ...\compressed_videos\compressed_highlight_reel.mp4 (took 1m 12s)
+Done! Saved to ...\compressed_videos\compressed_funny_moment.mov (took 0m 48s)
 All batch processing complete!
 
 Permanently delete the 3 original video(s) in input_videos? [y/N]:
 Permanently delete the 3 video(s) in compressed_videos? [y/N]:
 ```
+
+## Discord's upload limits
+
+| Account | Max file size |
+|---------|---------------|
+| Free | 20 MB |
+| Nitro Basic | 50 MB |
+| Nitro | 500 MB |
+
+These are Discord's limits as of August 2026, when the free limit was raised from 10 MB to 20 MB. They've changed before, so check Discord's help pages if uploads start failing. If you have Nitro, or a server that allows bigger uploads, set `target_size_mb` to match (see [Configuration](#configuration)).
 
 ## Clean-up prompts
 
@@ -103,7 +116,7 @@ Everything is a plain setting in `compressor.py`:
 
 | Setting | Where | Default | What it does |
 |---------|-------|---------|--------------|
-| `target_size_mb` | the `pool.submit(...)` call at the bottom | `20` | Target size per video in MB (1 MB = 1024 x 1024 bytes) |
+| `target_size_mb` | the `pool.submit(...)` call at the bottom | `20` | Target size per video in MB (1 MB = 1024 x 1024 bytes). Set it to your Discord limit. |
 | `MAX_WORKERS` | top of the file | half your CPU cores | How many videos are compressed at once |
 | `PASS1_SHARE` | top of the file | `0.3` | How much of the progress bar pass 1 gets (cosmetic only) |
 | `supported_extensions` | bottom of the file | `.mp4 .mov .avi .mkv .webm` | Which files are picked up |
@@ -111,9 +124,9 @@ Everything is a plain setting in `compressor.py`:
 
 ## Notes and troubleshooting
 
-- **The target is approximate.** The 10% cushion means files usually come out at or just under it, but the size isn't guaranteed.
-- **Very long videos.** If the video bitrate would fall below 100 kbps, the script warns you and uses 100 kbps, so the result can end up over the target.
-- **Quality.** Resolution and frame rate are left alone and only the bitrate is reduced. If a heavily compressed video looks blocky, try a larger target size.
+- **Discord still says the file is too big.** The target is approximate, and Discord may count a megabyte slightly differently than the script does (1 MB = 1024 x 1024 bytes here). Lower `target_size_mb` a little, for example to `18`, and run it again.
+- **Long videos.** The size is fixed, so the longer the video, the less data each second gets. At the default 20 MB, anything longer than about 11 minutes makes the script warn you and fall back to a minimum video bitrate of 100 kbps, so the file can end up over the limit. Trim long recordings first.
+- **Quality.** Resolution and frame rate are left alone and only the bitrate is reduced, so a short clip looks much better than a long one at the same file size. If a video looks blocky, trim it before compressing.
 - **Re-running** overwrites files with the same name in `compressed_videos/`.
 - `The system cannot find the file specified` (Windows) or `No such file or directory: 'ffprobe'` (macOS/Linux): ffmpeg isn't installed or isn't on your `PATH`.
 - `This script needs tqdm for its progress bars`: install it with the same Python you run the script with, using `python -m pip install tqdm`.

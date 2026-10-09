@@ -1,2 +1,5 @@
 input_videos/
 compressed_videos/
+__pycache__/
+.pytest_cache/
+*.py[cod]

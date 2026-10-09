@@ -151,10 +151,12 @@ def run_ffmpeg(cmd: list[str], duration: float, on_progress: Callable[[float], N
             errors="replace",
         )
     except FileNotFoundError as exc:
+        err_file.close()
         raise MediaError(
             "ffmpeg was not found. Install ffmpeg and make sure it is on PATH."
         ) from exc
     except OSError as exc:
+        err_file.close()
         raise MediaError(f"Could not start ffmpeg: {exc}") from exc
 
     try:

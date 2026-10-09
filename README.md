@@ -9,6 +9,7 @@ Compress a folder of videos to a size limit with one command. The script uses `f
 - Final output validation with automatic bitrate retries
 - Temporary output files, so failed encodes are never published as finished files
 - Optional resizing with `--max-height` for long or high-resolution clips
+- Broadly compatible `yuv420p` H.264 output
 - Batch processing with progress bars
 - Already-small videos are validated and copied without re-encoding
 - Failed inputs are never offered for deletion
@@ -71,11 +72,13 @@ Resize tall videos before encoding:
 python compressor.py --target-size 20 --max-height 720
 ```
 
-For automation or scripts, `--yes` skips the cleanup prompts and keeps all files:
+For automation or scripts, `--no-cleanup` skips the cleanup prompts and keeps all files:
 
 ```bash
-python compressor.py --input ./clips --output ./ready --yes
+python compressor.py --input ./clips --output ./ready --no-cleanup
 ```
+
+`--yes` remains available as a legacy alias for `--no-cleanup`.
 
 ### CLI options
 
@@ -86,7 +89,7 @@ python compressor.py --input ./clips --output ./ready --yes
 | `--output DIR` | `compressed_videos` | Folder for results |
 | `--workers N` | Half of CPU cores | Number of videos processed concurrently |
 | `--max-height PIXELS` | None | Scale videos taller than this height before encoding |
-| `--yes` | Off | Keep files and skip cleanup prompts |
+| `--no-cleanup` | Off | Keep files and skip cleanup prompts; `--yes` is a legacy alias |
 
 Supported input extensions are `.mp4`, `.mov`, `.avi`, `.mkv`, and `.webm`.
 
@@ -94,6 +97,7 @@ Supported input extensions are `.mp4`, `.mov`, `.avi`, `.mkv`, and `.webm`.
 
 - An input already under the target is copied as `uncompressed_<original-name>`.
 - A re-encoded input is saved as `compressed_<stem>.mp4`.
+- If multiple inputs have the same stem, their extensions are added to keep names unique, for example `compressed_clip_mp4.mp4` and `compressed_clip_mov.mp4`.
 - Each compressed result is written to a temporary file first.
 - The result is probed and size-checked before being atomically moved into the output folder.
 - If the result is too large, the video bitrate is reduced and encoding is retried up to three times.
@@ -108,13 +112,13 @@ When run interactively, the program separately asks whether to delete:
 1. Successfully processed originals
 2. Videos in the output folder, including results from earlier runs
 
-Press Enter or answer anything other than `y` / `yes` to keep files. Deletion is permanent and does not use the Recycle Bin. Use `--yes` to skip both prompts and keep everything.
+Press Enter or answer anything other than `y` / `yes` to keep files. Deletion is permanent and does not use the Recycle Bin. Use `--no-cleanup` to skip both prompts and keep everything.
 
 ## How it works
 
 1. `ffprobe` validates the input and reads its duration, dimensions, and audio streams.
 2. The target size is converted into a video bitrate with a 10% safety margin.
-3. ffmpeg performs two-pass H.264 encoding and AAC audio encoding when audio exists.
+3. ffmpeg performs two-pass H.264 encoding with `yuv420p` pixel format and AAC audio encoding when audio exists.
 4. A temporary MP4 is validated with `ffprobe` and checked against the byte limit.
 5. Oversized results are retried with a lower bitrate.
 
@@ -126,7 +130,7 @@ Run the test suite locally:
 python -m pytest -q
 ```
 
-GitHub Actions runs the suite on Python 3.8, 3.11, and 3.12. The repository does not include large media fixtures; the tests mock ffmpeg metadata and encoding where appropriate, while manual end-to-end testing should use real local clips.
+GitHub Actions runs the unit suite on Python 3.8, 3.11, and 3.12, plus a real ffmpeg integration encode on Ubuntu. The repository does not include large media fixtures; the unit tests mock ffmpeg metadata and encoding where appropriate.
 
 ## Troubleshooting
 

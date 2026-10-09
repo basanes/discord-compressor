@@ -21,7 +21,7 @@ def test_cli_parser_accepts_requested_options(tmp_path: Path) -> None:
             "2",
             "--max-height",
             "720",
-            "--yes",
+            "--no-cleanup",
         ]
     )
     assert args.target_size == 18
@@ -29,7 +29,20 @@ def test_cli_parser_accepts_requested_options(tmp_path: Path) -> None:
     assert args.output == tmp_path / "out"
     assert args.workers == 2
     assert args.max_height == 720
-    assert args.yes is True
+    assert args.no_cleanup is True
+    legacy_args = compressor.build_parser().parse_args(["--yes"])
+    assert legacy_args.no_cleanup is True
+
+
+def test_output_names_are_unique_for_same_stem() -> None:
+    files = [Path("clip.mp4"), Path("clip.mov"), Path("other.mkv")]
+
+    names = compressor.build_output_names(files)
+
+    assert names[Path("other.mkv")] == "compressed_other.mp4"
+    assert names[Path("clip.mp4")] == "compressed_clip_mp4.mp4"
+    assert names[Path("clip.mov")] == "compressed_clip_mov.mp4"
+    assert len(set(names.values())) == len(files)
 
 
 def test_probe_media_reports_ffprobe_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -79,6 +92,45 @@ def test_oversized_output_retries_and_publishes_only_valid_file(
     assert len(attempts) == 2
     assert output.name == "compressed_clip.mp4"
     assert output.stat().st_size == 80
+
+
+def test_encode_command_forces_compatible_pixel_format(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], duration: float, on_progress) -> None:
+        commands.append(command)
+
+    monkeypatch.setattr(compressor, "run_ffmpeg", fake_run)
+    monkeypatch.setattr(compressor, "tqdm", lambda **kwargs: _FakeProgress())
+    compressor._encode_once(
+        Path("input.mp4"),
+        Path("output.mp4"),
+        duration=1,
+        has_audio=False,
+        video_bitrate=100_000,
+        threads=1,
+        max_height=None,
+        label="input.mp4",
+    )
+
+    assert all(commands)
+    assert all(command[command.index("-pix_fmt") + 1] == "yuv420p" for command in commands)
+
+
+class _FakeProgress:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def set_description_str(self, value: str) -> None:
+        pass
+
+    def refresh(self) -> None:
+        pass
+
+    n = 0
 
 
 def test_validate_output_rejects_oversized_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

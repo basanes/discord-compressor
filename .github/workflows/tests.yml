@@ -21,3 +21,40 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Run tests
         run: python -m pytest -q
+
+  ffmpeg-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Generate a test video
+        run: |
+          mkdir -p integration-input integration-output
+          ffmpeg -hide_banner -loglevel error \
+            -f lavfi -i testsrc2=size=1280x720:rate=30 \
+            -f lavfi -i sine=frequency=440:sample_rate=48000 \
+            -t 3 -c:v libx264 -preset ultrafast -b:v 4M \
+            -c:a aac -b:a 128k integration-input/clip.mp4
+      - name: Run the real compressor
+        run: |
+          python compressor.py \
+            --target-size 0.5 \
+            --input integration-input \
+            --output integration-output \
+            --workers 1 \
+            --max-height 360 \
+            --no-cleanup
+      - name: Validate the generated MP4
+        run: |
+          test -f integration-output/compressed_clip.mp4
+          test "$(stat -c%s integration-output/compressed_clip.mp4)" -le 524288
+          test "$(ffprobe -v error -select_streams v:0 -show_entries stream=pix_fmt -of csv=p=0 integration-output/compressed_clip.mp4)" = "yuv420p"
+          ffprobe -v error integration-output/compressed_clip.mp4

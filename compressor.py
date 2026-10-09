@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Iterable
@@ -219,6 +220,8 @@ def _encode_once(
             "0:v:0",
             "-c:v",
             "libx264",
+            "-pix_fmt",
+            "yuv420p",
             "-b:v",
             str(video_bitrate),
             "-threads",
@@ -418,11 +421,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="optionally scale videos taller than this height before encoding",
     )
     parser.add_argument(
+        "--no-cleanup",
         "--yes",
+        dest="no_cleanup",
         action="store_true",
-        help="skip cleanup prompts and keep all files (safe default for automation)",
+        help="skip cleanup prompts and keep all files (--yes is a legacy alias)",
     )
     return parser
+
+
+def build_output_names(files: Iterable[Path]) -> dict[Path, str]:
+    """Build unique MP4 names, including an extension suffix when stems collide."""
+    files = list(files)
+    candidates = {path: f"compressed_{path.stem}.mp4" for path in files}
+    groups: dict[str, list[Path]] = defaultdict(list)
+    for path, candidate in candidates.items():
+        groups[candidate.casefold()].append(path)
+
+    output_names: dict[Path, str] = {}
+    for group in groups.values():
+        if len(group) == 1:
+            output_names[group[0]] = candidates[group[0]]
+            continue
+        used: set[str] = set()
+        for path in sorted(group, key=lambda item: item.name.casefold()):
+            extension = path.suffix.lstrip(".").lower() or "video"
+            base = f"compressed_{path.stem}_{extension}"
+            candidate = f"{base}.mp4"
+            index = 2
+            while candidate.casefold() in used:
+                candidate = f"{base}_{index}.mp4"
+                index += 1
+            used.add(candidate.casefold())
+            output_names[path] = candidate
+    return output_names
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -448,12 +480,13 @@ def main(argv: list[str] | None = None) -> int:
     threads_per_job = max(1, (os.cpu_count() or 2) // workers)
     print(f"Found {len(files)} video(s). Compressing {workers} at a time...\n")
     failed: set[Path] = set()
+    output_names = build_output_names(files)
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {}
         for input_file in files:
             # Compressed outputs are always MP4 for predictable Discord playback.
-            output_file = args.output / f"compressed_{input_file.stem}.mp4"
+            output_file = args.output / output_names[input_file]
             futures[pool.submit(
                 compress_video,
                 input_file,
@@ -473,7 +506,7 @@ def main(argv: list[str] | None = None) -> int:
     print("All batch processing complete!\n")
     if failed:
         print(f"Note: {len(failed)} video(s) failed, so their originals are left out of cleanup below.\n")
-    if not args.yes:
+    if not args.no_cleanup:
         originals = [path for path in files if path not in failed]
         offer_to_delete(
             f"Permanently delete the {len(originals)} original video(s) in {args.input.name}?",

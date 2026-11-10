@@ -1,0 +1,103 @@
+VIDEO MERGE + COMPRESS - COMMAND REFERENCE
+==========================================
+
+SETUP (one time)
+----------------
+1. Install ffmpeg (needs both ffmpeg and ffprobe on your PATH)
+     Windows : winget install ffmpeg
+     macOS   : brew install ffmpeg
+     Linux   : sudo apt install ffmpeg
+2. Install the progress-bar library
+     python -m pip install tqdm
+3. Keep these files in the SAME folder:
+     compressor.py
+     merge_compress.py
+
+FOLDERS (created next to the scripts)
+-------------------------------------
+  input_videos/        put the videos you want to use here
+  compressed_videos/   finished videos are saved here
+
+
+MERGE TWO VIDEOS (merge_compress.py)
+====================================
+Joins the two videos (first plays first), then compresses the result.
+Output is always saved as compressed_videos/<name>.mp4
+
+BASIC
+  python merge_compress.py intro.mp4 clip.mov -n final
+      -> compressed_videos/final.mp4
+
+AUTO-PICK (when input_videos/ has exactly two videos; alphabetical order)
+  python merge_compress.py -n final
+
+DEFAULT NAME (no -n given)
+  python merge_compress.py intro.mp4 clip.mov
+      -> compressed_videos/merged_compressed.mp4
+
+OPTIONS
+  VIDEO VIDEO          the two file names inside input_videos/ (first, second)
+  -n, --name NAME      output file name; ".mp4" is added for you
+                       (default: merged_compressed)
+  --target-size MB     max output size in MB (default: 20)
+  --max-height PIXELS  downscale if taller than this, e.g. 720 or 1080
+  --fps N              output frame rate (default: same as the first video)
+  --keep-merged        also save the uncompressed merge as
+                       compressed_videos/<name>_merged_uncompressed.mp4
+  -h, --help           show help
+
+EXAMPLES
+  python merge_compress.py a.mp4 b.mp4 -n trip
+  python merge_compress.py a.mp4 b.mp4 -n trip --target-size 50
+  python merge_compress.py a.mp4 b.mp4 -n trip --target-size 8 --max-height 720
+  python merge_compress.py a.mp4 b.mp4 -n trip --fps 30
+  python merge_compress.py a.mp4 b.mp4 -n trip --keep-merged
+  python merge_compress.py "my first clip.mp4" "my second clip.mp4" -n trip
+
+NOTES
+  - Order matters: the first name plays first.
+  - Names with spaces need quotes.
+  - Clips with different resolution/fps are scaled and padded to match the first clip.
+  - If one clip has no audio, silence is added so the audio stays in sync.
+  - Re-using a name overwrites the old file in compressed_videos/.
+
+
+BATCH COMPRESS (compressor.py)
+==============================
+Compresses every video in input_videos/ separately (no merging).
+Output: compressed_videos/compressed_<original name>.mp4
+
+  python compressor.py
+  python compressor.py --target-size 8
+  python compressor.py --target-size 50 --max-height 720
+  python compressor.py --workers 4
+  python compressor.py --no-cleanup
+
+OPTIONS
+  --target-size MB     max output size per video (default: 20)
+  --input DIR          input folder (default: input_videos next to the script)
+  --output DIR         output folder (default: compressed_videos next to the script)
+  --workers N          videos processed at the same time (default: half your CPU cores)
+  --max-height PIXELS  downscale videos taller than this
+  --no-cleanup         skip the "delete originals / results?" prompts (alias: --yes)
+  -h, --help           show help
+
+Supported formats: .mp4 .mov .avi .mkv .webm
+If a video is already under the target size it is copied as uncompressed_<name>.
+
+
+COMMON TARGET SIZES
+===================
+  Discord (free)       --target-size 10     (use 8 to be safe on older limits)
+  Discord (Nitro)      --target-size 50 / 500
+  Quick preview        --target-size 20     (default)
+
+
+TROUBLESHOOTING
+===============
+  "ffmpeg was not found"      -> install ffmpeg and make sure it is on PATH
+  "This script needs tqdm"    -> python -m pip install tqdm
+  "File not found: x.mp4"     -> check the file is in input_videos/ and the name is exact
+  "Auto-pick needs exactly 2" -> put exactly two videos in input_videos/, or name them
+  Output too blurry           -> raise --target-size or drop --max-height
+  Output over the limit       -> lower --target-size or add --max-height 720

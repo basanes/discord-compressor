@@ -2,8 +2,14 @@
 
 Reuses compressor.py (keep both files in the same folder).
 
-Example:
-    python merge_compress.py intro.mp4 clip.mov -o out/final.mp4 --target-size 20
+Folder layout (next to this script):
+    input_videos/        <- put the two videos to merge here
+    compressed_videos/   <- the finished video is written here
+
+Examples:
+    python merge_compress.py intro.mp4 clip.mov -n final
+    python merge_compress.py                      (auto-uses the 2 videos in input_videos/)
+    python merge_compress.py a.mp4 b.mp4 -n trip --target-size 50 --max-height 720
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ from pathlib import Path
 
 from compressor import (
     DEFAULT_TARGET_SIZE_MB,
+    SUPPORTED_EXTENSIONS,
     MediaError,
     compress_video,
     get_video_info,
@@ -27,6 +34,11 @@ from compressor import (
 
 AUDIO_RATE = 48_000
 DEFAULT_FPS = 30.0
+DEFAULT_OUTPUT_NAME = "merged_compressed"
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+INPUT_DIR = SCRIPT_DIR / "input_videos"
+OUTPUT_DIR = SCRIPT_DIR / "compressed_videos"
 
 
 def _video_stream(path: Path) -> dict:
@@ -169,6 +181,12 @@ def merge_and_compress(
         log("Compressing merged video...")
         result = compress_video(merged, output_file, target_size_mb, threads, max_height)
 
+        # If the merge was already under the target, compress_video copies it as
+        # "uncompressed_<name>"; rename it so the file always has the name you chose.
+        if result != output_file:
+            os.replace(result, output_file)
+            result = output_file
+
         if keep_merged:
             kept = output_file.with_name(f"{output_file.stem}_merged_uncompressed.mp4")
             kept.write_bytes(merged.read_bytes())
@@ -176,12 +194,58 @@ def merge_and_compress(
     return result
 
 
+def resolve_input(name: str) -> Path:
+    """Find a video inside input_videos/ (falls back to the path exactly as typed)."""
+    in_folder = INPUT_DIR / name
+    if in_folder.is_file():
+        return in_folder
+    as_typed = Path(name)
+    if as_typed.is_file():
+        return as_typed
+    raise SystemExit(f"File not found: {name} (looked in {INPUT_DIR})")
+
+
+def pick_inputs(names: list[str]) -> tuple[Path, Path]:
+    """Return the two videos to merge: the ones named, or the two in input_videos/."""
+    if len(names) == 2:
+        return resolve_input(names[0]), resolve_input(names[1])
+    if names:
+        raise SystemExit("Give exactly two video names (first, second), or none to auto-pick.")
+
+    INPUT_DIR.mkdir(parents=True, exist_ok=True)
+    found = sorted(
+        (p for p in INPUT_DIR.iterdir() if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS),
+        key=lambda p: p.name.lower(),
+    )
+    if len(found) != 2:
+        listing = ", ".join(p.name for p in found) or "none"
+        raise SystemExit(
+            f"Auto-pick needs exactly 2 videos in {INPUT_DIR} (found {len(found)}: {listing}). "
+            "Name them on the command line instead: python merge_compress.py first.mp4 second.mp4"
+        )
+    log(f"Auto-picked (alphabetical order): {found[0].name} then {found[1].name}")
+    return found[0], found[1]
+
+
+def output_path_for(name: str) -> Path:
+    """compressed_videos/<name>.mp4 - any folder part or extension in the name is ignored."""
+    stem = Path(name).stem.strip()
+    if not stem:
+        raise SystemExit("--name must not be empty")
+    return OUTPUT_DIR / f"{stem}.mp4"
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Join two videos, then compress to a target size.")
-    parser.add_argument("first", type=Path, help="video that plays first")
-    parser.add_argument("second", type=Path, help="video that plays second")
-    parser.add_argument("-o", "--output", type=Path, default=Path("merged_compressed.mp4"),
-                        help="output file (default: merged_compressed.mp4)")
+    parser = argparse.ArgumentParser(
+        description="Join two videos from input_videos/, then compress to a target size "
+                    "into compressed_videos/."
+    )
+    parser.add_argument("videos", nargs="*", metavar="VIDEO",
+                        help="the two file names inside input_videos/ (first plays first). "
+                             "Leave out to auto-use the two videos in the folder")
+    parser.add_argument("-n", "--name", default=DEFAULT_OUTPUT_NAME,
+                        help=f"name of the output mp4, .mp4 is added for you "
+                             f"(default: {DEFAULT_OUTPUT_NAME})")
     parser.add_argument("--target-size", type=float, default=DEFAULT_TARGET_SIZE_MB, metavar="MB",
                         help=f"maximum output size in MB (default: {DEFAULT_TARGET_SIZE_MB:g})")
     parser.add_argument("--max-height", type=int, metavar="PIXELS",
@@ -194,15 +258,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    for path in (args.first, args.second):
-        if not path.is_file():
-            raise SystemExit(f"File not found: {path}")
+    first, second = pick_inputs(args.videos)
+    if first.resolve() == second.resolve():
+        raise SystemExit("The two videos must be different files")
     if args.target_size <= 0:
         raise SystemExit("--target-size must be greater than zero")
     if args.max_height is not None and args.max_height <= 0:
         raise SystemExit("--max-height must be greater than zero")
+    if args.fps is not None and args.fps <= 0:
+        raise SystemExit("--fps must be greater than zero")
+
+    output_file = output_path_for(args.name)
     try:
-        merge_and_compress(args.first, args.second, args.output, args.target_size,
+        merge_and_compress(first, second, output_file, args.target_size,
                            args.max_height, args.fps, keep_merged=args.keep_merged)
     except MediaError as exc:
         raise SystemExit(f"Error: {exc}") from exc
